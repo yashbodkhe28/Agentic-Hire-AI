@@ -1,0 +1,90 @@
+# ============================================================
+#  AgentHire AI — .gitignore
+#  Excludes compiled artifacts, secrets, and large binaries
+# ============================================================
+
+# ─── Maven build output (BIGGEST excludes — ~1 GB) ──────────
+**/target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# ─── Java compiled files ────────────────────────────────────
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+
+# ─── Sensitive credentials — NEVER commit these ─────────────
+.env
+.env.local
+.env.production
+*.key
+*.pem
+secrets/
+
+# ─── Docker volumes and local data ──────────────────────────
+docker/volumes/
+mysql-data/
+redis-data/
+
+# ─── IDE files ───────────────────────────────────────────────
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/settings.json
+*.code-workspace
+.settings/
+.classpath
+.project
+.factorypath
+
+# ─── OS generated files ─────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ─── Logs ───────────────────────────────────────────────────
+*.log
+*.log.*
+logs/
+log/
+
+# ─── Temporary / test files ─────────────────────────────────
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# ─── Spring Boot DevTools ────────────────────────────────────
+.spring-boot-devtools.properties
+
+# ─── Maven wrapper (keep the jar, ignore extracted) ──────────
+!.mvn/
+.mvn/wrapper/maven-wrapper.properties.bak
+
+# ─── Node (if any frontend tooling is added later) ──────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── Gradle (not used, but just in case) ────────────────────
+.gradle/
+build/
+
+# ─── Test output ────────────────────────────────────────────
+surefire-reports/
+failsafe-reports/
+test-output/
+
+# ─── Monitoring data (generated at runtime) ─────────────────
+monitoring/grafana/data/
+monitoring/prometheus/data/

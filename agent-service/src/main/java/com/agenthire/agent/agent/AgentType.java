@@ -1,0 +1,10 @@
+package com.agenthire.agent.agent;
+
+public enum AgentType {
+    RESUME_ANALYZER,
+    JOB_MATCHER,
+    INTERVIEW_QUESTION_GENERATOR,
+    INTERVIEW_EVALUATOR,
+    HIRING_RECOMMENDER,
+    RECRUITER_COPILOT
+}

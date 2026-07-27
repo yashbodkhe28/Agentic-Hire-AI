@@ -1,0 +1,179 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  config:
+    import: optional:configserver:${CONFIG_SERVER_URI:http://localhost:8888}
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+        # Auth Service
+        - id: auth-service
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/auth/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: auth-cb
+                fallbackUri: forward:/fallback/auth
+
+        # Candidate Service
+        - id: candidate-service
+          uri: lb://candidate-service
+          predicates:
+            - Path=/api/candidates/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: candidate-cb
+                fallbackUri: forward:/fallback/candidate
+
+        # Recruiter Service - Jobs
+        - id: recruiter-service-jobs
+          uri: lb://recruiter-service
+          predicates:
+            - Path=/api/jobs/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: recruiter-cb
+                fallbackUri: forward:/fallback/recruiter
+
+        # Recruiter Service - Recruiters
+        - id: recruiter-service-recruiters
+          uri: lb://recruiter-service
+          predicates:
+            - Path=/api/recruiters/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: recruiter-cb
+                fallbackUri: forward:/fallback/recruiter
+
+        # Recruiter Service - Applications
+        - id: recruiter-service-applications
+          uri: lb://recruiter-service
+          predicates:
+            - Path=/api/applications/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: recruiter-cb
+                fallbackUri: forward:/fallback/recruiter
+
+        # Recruiter Service - Companies
+        - id: recruiter-service-companies
+          uri: lb://recruiter-service
+          predicates:
+            - Path=/api/companies/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: recruiter-cb
+                fallbackUri: forward:/fallback/recruiter
+
+        # Interview Service
+        - id: interview-service
+          uri: lb://interview-service
+          predicates:
+            - Path=/api/interviews/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: interview-cb
+                fallbackUri: forward:/fallback/interview
+
+        # Live Coding Service
+        - id: live-coding-service
+          uri: lb://live-coding-service
+          predicates:
+            - Path=/api/coding/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: coding-cb
+                fallbackUri: forward:/fallback/interview
+
+        # Agent Service
+        - id: agent-service
+          uri: lb://agent-service
+          predicates:
+            - Path=/api/agents/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: agent-cb
+                fallbackUri: forward:/fallback/agent
+
+        # Notification Service
+        - id: notification-service
+          uri: lb://notification-service
+          predicates:
+            - Path=/api/notifications/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: notification-cb
+                fallbackUri: forward:/fallback/notification
+
+        # Analytics Service
+        - id: analytics-service
+          uri: lb://analytics-service
+          predicates:
+            - Path=/api/analytics/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: analytics-cb
+                fallbackUri: forward:/fallback/analytics
+
+  redis:
+    host: ${REDIS_HOST:redis}
+    port: 6379
+    password: ${REDIS_PASSWORD:redis123}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://eureka:eureka123@${EUREKA_HOST:eureka-server}:8761/eureka/
+  instance:
+    prefer-ip-address: true
+
+jwt:
+  secret: ${JWT_SECRET:agenthire-super-secret-jwt-key-2024-must-be-at-least-256-bits-long}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,gateway
+  endpoint:
+    health:
+      show-details: always
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://${ZIPKIN_HOST:zipkin}:9411/api/v2/spans
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        permitted-number-of-calls-in-half-open-state: 3
+        wait-duration-in-open-state: 10s
+        failure-rate-threshold: 50
+        record-exceptions:
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+          - org.springframework.cloud.gateway.support.NotFoundException

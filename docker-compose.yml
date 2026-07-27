@@ -1,0 +1,527 @@
+# ============================================================
+# AgentHire AI - Docker Compose Infrastructure
+# Sets up MySQL, Redis, Kafka, Zookeeper, Prometheus, Grafana, Zipkin
+# ============================================================
+
+
+services:
+  # ============================================================
+  # MySQL 8.0 Database
+  # ============================================================
+  mysql:
+    image: mysql:8.0
+    container_name: agenthire-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      MYSQL_DATABASE: agenthire_db
+      MYSQL_USER: ${MYSQL_USER:-agenthire}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-agenthire123}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./sql/seed-data.sql:/docker-entrypoint-initdb.d/02-seed-data.sql
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=caching_sha2_password
+      --max-connections=500
+      --innodb-buffer-pool-size=256M
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Redis 7.2
+  # ============================================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: agenthire-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-redis123}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Zookeeper (Kafka dependency)
+  # ============================================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: agenthire-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Apache Kafka
+  # ============================================================
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: agenthire-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+      KAFKA_MESSAGE_MAX_BYTES: 10485760
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Kafka UI (Optional - for monitoring Kafka topics)
+  # ============================================================
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: agenthire-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: agenthire-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    ports:
+      - "8089:8080"
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Prometheus (Metrics Collection)
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: agenthire-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Grafana (Metrics Visualization)
+  # ============================================================
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: agenthire-grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Zipkin (Distributed Tracing)
+  # ============================================================
+  zipkin:
+    image: openzipkin/zipkin:3.3
+    container_name: agenthire-zipkin
+    restart: unless-stopped
+    ports:
+      - "9411:9411"
+    environment:
+      STORAGE_TYPE: mem
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9411/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Eureka Server (Service Discovery)
+  # ============================================================
+  eureka-server:
+    build: ./eureka-server
+    container_name: agenthire-eureka
+    restart: unless-stopped
+    ports:
+      - "8761:8761"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8761 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Config Server
+  # ============================================================
+  config-server:
+    build: ./config-server
+    container_name: agenthire-config
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    depends_on:
+      eureka-server:
+        condition: service_started
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker,native
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # API Gateway
+  # ============================================================
+  api-gateway:
+    build: ./api-gateway
+    container_name: agenthire-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      eureka-server:
+        condition: service_started
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis123}
+      - JWT_SECRET=${JWT_SECRET:-agenthire-super-secret-jwt-key-256-bits-long}
+      - ZIPKIN_URL=http://zipkin:9411
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Auth Service
+  # ============================================================
+  auth-service:
+    build: ./auth-service
+    container_name: agenthire-auth
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER:-agenthire}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-agenthire123}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis123}
+      - KAFKA_SERVERS=kafka:29092
+      - JWT_SECRET=${JWT_SECRET:-agenthire-super-secret-jwt-key-256-bits-long}
+      - JWT_EXPIRATION_MS=86400000
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Candidate Service
+  # ============================================================
+  candidate-service:
+    build: ./candidate-service
+    container_name: agenthire-candidate
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER:-agenthire}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-agenthire123}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis123}
+      - KAFKA_SERVERS=kafka:29092
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+      - UPLOAD_DIR=/app/uploads
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Recruiter Service
+  # ============================================================
+  recruiter-service:
+    build: ./recruiter-service
+    container_name: agenthire-recruiter
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER:-agenthire}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-agenthire123}
+      - KAFKA_SERVERS=kafka:29092
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Interview Service
+  # ============================================================
+  interview-service:
+    build: ./interview-service
+    container_name: agenthire-interview
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER:-agenthire}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-agenthire123}
+      - KAFKA_SERVERS=kafka:29092
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Live Coding Service
+  # ============================================================
+  live-coding-service:
+    build: ./live-coding-service
+    container_name: agenthire-livecoding
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    depends_on:
+      eureka-server:
+        condition: service_started
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - KAFKA_SERVERS=kafka:29092
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Agent Service
+  # ============================================================
+  agent-service:
+    build: ./agent-service
+    container_name: agenthire-agent
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER:-agenthire}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-agenthire123}
+      - KAFKA_SERVERS=kafka:29092
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-key}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-your-gemini-key}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Notification Service
+  # ============================================================
+  notification-service:
+    build: ./notification-service
+    container_name: agenthire-notification
+    restart: unless-stopped
+    ports:
+      - "8087:8087"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - KAFKA_SERVERS=kafka:29092
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_USERNAME=${SMTP_USERNAME:-noreply@agenthire.ai}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-password}
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Analytics Service
+  # ============================================================
+  analytics-service:
+    build: ./analytics-service
+    container_name: agenthire-analytics
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=${MYSQL_USER:-agenthire}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-agenthire123}
+      - KAFKA_SERVERS=kafka:29092
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+    networks:
+      - agenthire-network
+
+  # ============================================================
+  # Web Application
+  # ============================================================
+  webapp:
+    build:
+      context: .
+      dockerfile: webapp/Dockerfile
+    container_name: agenthire-webapp
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    depends_on:
+      api-gateway:
+        condition: service_started
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - API_GATEWAY_URL=http://api-gateway:8080
+      - EUREKA_URI=http://eureka:eureka123@eureka-server:8761/eureka/
+    networks:
+      - agenthire-network
+
+# ============================================================
+# Volumes
+# ============================================================
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  zookeeper_data:
+    driver: local
+  zookeeper_log:
+    driver: local
+  kafka_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  uploads_data:
+    driver: local
+
+# ============================================================
+# Networks
+# ============================================================
+networks:
+  agenthire-network:
+    driver: bridge
+    name: agenthire-network

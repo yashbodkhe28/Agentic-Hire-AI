@@ -1,0 +1,46 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: webapp
+  mvc:
+    view:
+      prefix: /WEB-INF/views/
+      suffix: .jsp
+  web:
+    resources:
+      add-mappings: true
+  config:
+    import: optional:configserver:${CONFIG_SERVER_URI:http://localhost:8888}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://eureka:eureka123@${EUREKA_HOST:eureka-server}:8761/eureka/
+    register-with-eureka: false
+    fetch-registry: false
+  instance:
+    prefer-ip-address: true
+
+# API Gateway proxy base URL (must match @Value in ApiProxyController)
+gateway:
+  url: ${GATEWAY_URL:http://api-gateway:8080}
+
+# Direct auth-service URL (bypasses gateway for register/login - no CORS issues)
+auth:
+  service:
+    url: ${AUTH_SERVICE_URL:http://auth-service:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.agenthire: INFO
